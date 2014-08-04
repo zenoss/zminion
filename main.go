@@ -38,6 +38,28 @@ type CommandOutput struct {
 	ExitCode int
 }
 
+type writerToChan struct {
+	output chan []byte
+}
+
+func newWriterToChan() *writerToChan {
+	return &writerToChan{
+		output: make(chan []byte, 100),
+	}
+}
+
+func (w *writerToChan) Write(b []byte) (n int, err error) {
+	glog.V(3).Infof("write called: %s", b)
+	d := make([]byte, len(b))
+	copy(d, b)
+	w.output <- d
+	return len(b), nil
+}
+
+func (w *writerToChan) Close() {
+	close(w.output)
+}
+
 // createCommand creates a Command object given the bash command c
 func (s *ShellService) createCommand(c string) Command {
 
@@ -139,75 +161,76 @@ func (s *ShellService) shellExecutorProcess(msg Command, closing chan bool, retu
 	}
 
 	cmd := exec.Command("/bin/sh", "-c", msg.Command)
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		glog.Errorf("Could not open stdout: %s", err)
-		returnErr <- err
-		return
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		glog.Errorf("Could not open stderr: %s", err)
-		returnErr <- err
-		return
-	}
 
-	if err := cmd.Start(); err != nil {
-		glog.Errorf("Could not start subprocess: %s", err)
-		returnErr <- err
-		return
-	}
+	stdoutChan := newWriterToChan()
+	stderrChan := newWriterToChan()
+	cmd.Stdout = stdoutChan
+	cmd.Stderr = stderrChan
 
-	stdoutBuffer := make([]byte, 1024*8)
-	stderrBuffer := make([]byte, 1024*8)
-	overtime := time.After(time.Duration(maxSeconds) * time.Second)
+	done := make(chan error)
+
+	go func() {
+		done <- cmd.Run()
+	}()
+
+	flushInterval := time.Tick(time.Second)
+	stdoutBuffer := make([]byte, 0)
+	stderrBuffer := make([]byte, 0)
+	overtime := time.After(time.Second * time.Duration(maxSeconds))
+
+	flush := func(done bool, exitCode int) {
+		if len(stdoutBuffer) == 0 && len(stderrBuffer) == 0 && !done {
+			return
+		}
+		cMsg := CommandOutput{
+			Stdout:   string(stdoutBuffer),
+			Stderr:   string(stderrBuffer),
+			Time:     time.Now(),
+			Exited:   done,
+			ExitCode: exitCode,
+		}
+		msgStr, _ := json.Marshal(cMsg)
+		glog.V(0).Infof("sending to %s: %s", msg.ReturnQueue, msgStr)
+		c.Send("RPUSH", msg.ReturnQueue, string(msgStr))
+		c.Send("EXPIRE", msg.ReturnQueue, 600)
+		c.Flush()
+	}
 	for {
-		stdoutN, serr := stdout.Read(stdoutBuffer)
-		stderrN, eerr := stderr.Read(stderrBuffer)
-		if stdoutN > 0 || stderrN > 0 {
-			cMsg := CommandOutput{
-				Stdout: string(stdoutBuffer[0:stdoutN]),
-				Stderr: string(stdoutBuffer[0:stderrN]),
-				Time:   time.Now(),
-			}
-			msgStr, _ := json.Marshal(cMsg)
-			glog.V(2).Infof("sending to %s: %s", msg.ReturnQueue, msgStr)
-			c.Send("RPUSH", msg.ReturnQueue, string(msgStr))
-			c.Send("EXPIRE", msg.ReturnQueue, 600)
-			c.Flush()
-			continue
-		}
-		if serr != nil || eerr != nil {
-			break
-		}
 		select {
+		case err := <-done:
+			exitCode, _ := utils.GetExitStatus(err)
+			flush(true, exitCode)
+			returnErr <- err
+			break
+		case buffer, ok := <-stdoutChan.output:
+			if !ok {
+				stdoutChan = nil
+			}
+			if buffer != nil {
+				stdoutBuffer = append(stdoutBuffer, buffer...)
+			}
+		case buffer, ok := <-stderrChan.output:
+			if !ok {
+				stderrChan = nil
+				continue
+			}
+			if buffer != nil {
+				stderrBuffer = append(stderrBuffer, buffer...)
+			}
+		case <-flushInterval:
+			flush(false, 0)
+			stdoutBuffer = make([]byte, 0)
+			stderrBuffer = make([]byte, 0)
+			continue
 		case <-overtime:
 			glog.Warning("Killing long execution: %s", cmd)
 			cmd.Process.Kill()
-			returnErr <- nil
-			return
+			break
 		case <-closing:
 			cmd.Process.Kill()
-			returnErr <- nil
-			return
-		case <-time.After(time.Second):
+			break
 		}
 	}
-	glog.Infof("waiting for process to exit")
-	exitCode := 0
-	if err := cmd.Wait(); err != nil {
-		glog.Errorf("error running command: %s", err)
-		exitCode, _ = utils.GetExitStatus(err)
-	}
-	oMsg := CommandOutput{
-		Time:     time.Now(),
-		Exited:   true,
-		ExitCode: exitCode,
-	}
-	msgBytes, _ := json.Marshal(oMsg)
-	c.Send("RPUSH", msg.ReturnQueue, string(msgBytes))
-	c.Flush()
-	returnErr <- nil
 
 }
 
