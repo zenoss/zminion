@@ -125,17 +125,23 @@ func (s *ShellService) getConnection() (redis.Conn, error) {
 }
 
 // Run sends a command to the redis queue then listens for the execution output
-func (s *ShellService) Run(cmd string) error {
+func (s *ShellService) Run(cmd string, printQueueName bool) error {
 	conn, err := s.getConnection()
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
 
+	// send command to broker
 	command := s.createCommand(cmd)
 	output, err := s.sendCommand(conn, command)
 	if err != nil {
 		return err
+	}
+
+	if printQueueName {
+		fmt.Println(command.ReturnQueue)
+		return nil
 	}
 	for {
 		output, ok := <-output
@@ -159,16 +165,18 @@ func (s *ShellService) shellExecutorProcess(msg Command, closing chan bool, retu
 		returnErr <- err
 		return
 	}
+	defer c.Close()
 
 	cmd := exec.Command("/bin/sh", "-c", msg.Command)
 
+	// use special buffers that send writes to a chan
 	stdoutChan := newWriterToChan()
 	stderrChan := newWriterToChan()
 	cmd.Stdout = stdoutChan
 	cmd.Stderr = stderrChan
 
+	// setup notification that subprocess exited
 	done := make(chan error)
-
 	go func() {
 		done <- cmd.Run()
 	}()
@@ -179,6 +187,7 @@ func (s *ShellService) shellExecutorProcess(msg Command, closing chan bool, retu
 	overtime := time.After(time.Second * time.Duration(maxSeconds))
 
 	flush := func(done bool, exitCode int) {
+		// don't bother sending output if there is none
 		if len(stdoutBuffer) == 0 && len(stderrBuffer) == 0 && !done {
 			return
 		}
@@ -190,42 +199,52 @@ func (s *ShellService) shellExecutorProcess(msg Command, closing chan bool, retu
 			ExitCode: exitCode,
 		}
 		msgStr, _ := json.Marshal(cMsg)
-		glog.V(0).Infof("sending to %s: %s", msg.ReturnQueue, msgStr)
+		glog.V(1).Infof("sending to %s: %s", msg.ReturnQueue, msgStr)
 		c.Send("RPUSH", msg.ReturnQueue, string(msgStr))
+		// reader should pick this up in less than 600 seconds
 		c.Send("EXPIRE", msg.ReturnQueue, 600)
 		c.Flush()
 	}
 	for {
 		select {
+
+		// handle subprocess exiting
 		case err := <-done:
 			exitCode, _ := utils.GetExitStatus(err)
 			flush(true, exitCode)
 			returnErr <- err
 			break
+
+		// handle subprocess stdout
 		case buffer, ok := <-stdoutChan.output:
 			if !ok {
+				// channel is closed, stop listenting
 				stdoutChan = nil
+				continue
 			}
-			if buffer != nil {
-				stdoutBuffer = append(stdoutBuffer, buffer...)
-			}
+			stdoutBuffer = append(stdoutBuffer, buffer...)
+
+		// handle subprocess stderr
 		case buffer, ok := <-stderrChan.output:
 			if !ok {
+				// channel is closed, stop listenting
 				stderrChan = nil
 				continue
 			}
-			if buffer != nil {
-				stderrBuffer = append(stderrBuffer, buffer...)
-			}
+			stderrBuffer = append(stderrBuffer, buffer...)
+
+		// flush to redis periodically
 		case <-flushInterval:
 			flush(false, 0)
 			stdoutBuffer = make([]byte, 0)
 			stderrBuffer = make([]byte, 0)
-			continue
+
+		// subprocess has run too long
 		case <-overtime:
 			glog.Warning("Killing long execution: %s", cmd)
 			cmd.Process.Kill()
-			break
+
+		// we got close signal, kill subprocess
 		case <-closing:
 			cmd.Process.Kill()
 			break
@@ -328,6 +347,12 @@ func main() {
 		{
 			Name:  "run",
 			Usage: "run a command on a remote minion",
+			Flags: []cli.Flag{
+				cli.BoolFlag{
+					Name:  "send-only",
+					Usage: "print the name of the return queue and don't print the output",
+				},
+			},
 			Action: func(c *cli.Context) {
 				shellService := ShellService{
 					redisAddress: c.GlobalString("redis-address"),
@@ -337,7 +362,7 @@ func main() {
 				if len(args) < 1 {
 					glog.Fatalf("run requires an argument")
 				}
-				shellService.Run(args[0])
+				shellService.Run(args[0], c.Bool("send-only"))
 			},
 		},
 	}
