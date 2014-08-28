@@ -9,8 +9,8 @@
 		},
 		{
 			"ImportPath": "github.com/control-center/serviced/utils",
-			"Comment": "0.5.1-2592-g1b2a793",
-			"Rev": "1b2a793d6c588f86f8121aa315d4dfd5fd36d0e8"
+			"Comment": "0.8.0-3781bf3",
+			"Rev": "3781bf37b90d7bd0ce92452586c6d9db32bb2b34"
 		},
 		{
 			"ImportPath": "github.com/garyburd/redigo/redis",
