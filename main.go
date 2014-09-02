@@ -315,11 +315,13 @@ func (s *ShellService) Serve(executors int, maxSeconds int) error {
 	return nil
 }
 
+var Version string
+
 func main() {
 	app := cli.NewApp()
 	app.Name = "zminion"
 	app.Usage = "a client for distributed bash executions"
-	app.Version = "0.1"
+	app.Version = Version
 	app.Commands = []cli.Command{
 		{
 			Name:  "serve",

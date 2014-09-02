@@ -3,6 +3,12 @@
 *.a
 *.so
 
+.Godeps_restored
+pkg/pkgroot
+pkg/zminion-*.rpm
+pkg/zminion-*.deb
+zminion
+
 # Folders
 _obj
 _test

@@ -84,7 +84,7 @@ build: zminion
 
 zminion: $(Godeps_restored)
 	$(GODEP) restore $(PACKAGE)
-	go build -x
+	go build ${LDFLAGS}
 	#go install
 
 zminion = $(GOBIN)/zminion
