@@ -1,6 +1,10 @@
-# docker run -i -t -w /mnt/src -v $(pwd):/mnt/src zenoss/rpmbuild:centos7 bash
-# 	yum install gem
-# 	gem install fpm
+# Copyright 2014, The ZMinion Authors. All rights reserved.
+# Use of this source code is governed by the GPL 2.0
+# license that can be found in the LICENSE file.
+
+#
+# builder for ZMinion.
+#
 
 PREFIX ?= /opt/serviced
 PACKAGE=github.com/zenoss/zminion

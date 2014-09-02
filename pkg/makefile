@@ -1,5 +1,5 @@
 # Copyright 2014, The ZMinion Authors. All rights reserved.
-# Use of this source code is governed by the Apache 2.0
+# Use of this source code is governed by the GPL 2.0
 # license that can be found in the LICENSE file.
 
 #
@@ -14,9 +14,9 @@ SUBPRODUCT    ?=
 MAINTAINER    ="Zenoss CM <cm@zenoss.com>"
 PKGROOT       = pkgroot
 # https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/#license-specification
-DEB_LICENSE   = Apache-2
+DEB_LICENSE   = "GPL-2.0"
 # https://fedoraproject.org/wiki/Licensing:Main?rd=Licensing
-RPM_LICENSE   = "ASL 2.0"
+RPM_LICENSE   = "GPLv2"
 VENDOR        = "Zenoss, Inc."
 URL           = https://github.com/zenoss/zminion
 DEB_PRIORITY  = extra
