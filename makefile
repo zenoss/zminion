@@ -35,7 +35,7 @@ DUID         ?= $(shell id -u)
 DGID         ?= $(shell id -g)
 DESCRIPTION  := A simple shell execution client/server using redis
 GODEPS_FILES := $(shell find Godeps/)
-FULL_PATH     = $(shell echo $URL | sed 's|https:/||')
+FULL_PATH     = $(shell echo $(URL) | sed 's|https:/||')
 DOCKER_WDIR  := /go/src$(FULL_PATH)
 
 
@@ -113,6 +113,6 @@ clean:
 	rm -f *.deb
 	rm -f *.rpm
 	rm -f *.tgz
-	rm -fr $(PKGROOT)
+	rm -fr /tmp/$(FULL_NAME)-pkgroot-*
 
 
