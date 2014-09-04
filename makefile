@@ -1,109 +1,114 @@
-# Copyright 2014, The ZMinion Authors. All rights reserved.
-# Use of this source code is governed by the GPL 2.0
-# license that can be found in the LICENSE file.
-
+# Copyright (C) 2014 Zenoss, Inc
 #
-# builder for ZMinion.
+# zminion is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 2 of the License, or
+# (at your option) any later version.
 #
+# zminion is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with Foobar. If not, see <http://www.gnu.org/licenses/>.
 
-PREFIX ?= /opt/serviced
-PACKAGE=github.com/zenoss/zminion
-
-VERSION := $(shell cat ./VERSION)
-DATE := '$(shell date -u)'
-
-# GIT_URL ?= $(shell git remote -v | awk '$3 == "(fetch)" {print $$2}')
-# assume it will get set because the above can cause network traffic on every run
-GIT_COMMIT ?= $(shell ./gitstatus.sh)
-GIT_BRANCH ?= $(shell git rev-parse --abbrev-ref HEAD)
-
+## setup all environment stuff
+FULL_NAME     = zminion
+VERSION      := $(shell cat ./VERSION)
+DATE         := $(shell date -u)
+GIT_COMMIT   ?= $(shell ./hack/gitstatus.sh)
+GIT_BRANCH   ?= $(shell git rev-parse --abbrev-ref HEAD)
 # jenkins default, jenkins-${JOB_NAME}-${BUILD_NUMBER}
-BUILD_TAG ?= 0
+BUILD_TAG    ?= 0
+LDFLAGS       = -ldflags "-X main.Version $(VERSION) -X main.Gitcommit '$(GIT_COMMIT)' -X main.Gitbranch '$(GIT_BRANCH)' -X main.Date '$(DATE)' -X main.Buildtag '$(BUILD_TAG)'"
+
+MAINTAINER    = dev@zenoss.com
+# https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/#license-specification
+DEB_LICENSE   = "GPL-2.0"
+# https://fedoraproject.org/wiki/Licensing:Main?rd=Licensing
+RPM_LICENSE   = "GPLv2"
+VENDOR        = Zenoss
+URL           = https://github.com/zenoss/zminion
+PKGROOT       = /tmp/pkgroot
+DUID         ?= $(shell id -u)
+DGID         ?= $(shell id -g)
+DESCRIPTION  := A simple shell execution client/server using redis
+GODEPS_FILES := $(shell find Godeps/)
 
 
-LDFLAGS = -ldflags "-X main.Version $(VERSION) -X main.Giturl '$(GIT_URL)' -X main.Gitcommit $(GIT_COMMIT) -X main.Gitbranch $(GIT_BRANCH) -X main.Date $(DATE) -X main.Buildtag $(BUILD_TAG)"
+## generic workhorse targets
+$(FULL_NAME): VERSION *.go hack/* makefile $(GODEPS_FILES)
+	godep go build ${LDFLAGS}
+	chown $(DUID):$(DGID) $(FULL_NAME)
 
-.PHONY: default
-default: build
+docker-tgz: $(FULL_NAME)-build
+	docker run --rm -v `pwd`:/go/src/github.com/zenoss/$(FULL_NAME) -e DUID=$(DUID) -e DGID=$(DGID) zenoss/$(FULL_NAME)-build:$(VERSION) make tgz
 
-#------------------------------------------------------------------------------#
-# Define GOPATH for containerized builds.
-#
-#    NB: Keep this in sync with build/Dockerfile: ENV GOPATH /go
-#
-docker_GOPATH = /go
+docker-deb: $(FULL_NAME)-build
+	docker run --rm -v `pwd`:/go/src/github.com/zenoss/$(FULL_NAME) -e DUID=$(DUID) -e DGID=$(DGID) zenoss/$(FULL_NAME)-build:$(VERSION) make deb
 
-ifeq "$(GOPATH)" ""
-    $(warning "GOPATH not set. Ok to ignore for containerized builds.")
-else
-    GOSRC = $(GOPATH)/src
-    GOBIN = $(GOPATH)/bin
-    GOPKG = $(GOPATH)/pkg
-endif
+docker-rpm: $(FULL_NAME)-build
+	docker run --rm -v `pwd`:/go/src/github.com/zenoss/$(FULL_NAME) -e DUID=$(DUID) -e DGID=$(DGID) zenoss/$(FULL_NAME)-build:$(VERSION) make rpm
 
-#------------------------------------------------------------------------------#
-# copied from https://github.com/control-center/serviced/blob/develop/makefile
-#------------------------------------------------------------------------------#
-GODEP     = $(GOBIN)/godep
-Godeps    = Godeps
-godep_SRC = github.com/tools/godep
-
-Godeps_restored = .Godeps_restored
-$(Godeps_restored): $(GODEP) $(Godeps)
-	@echo "$(GODEP) restore" ;\
-	$(GODEP) restore ;\
-	rc=$$? ;\
-	if [ $${rc} -ne 0 ] ; then \
-		echo "ERROR: Failed $(GODEP) restore. [rc=$${rc}]" ;\
-		echo "** Unable to restore your GOPATH to a baseline state." ;\
-		echo "** Perhaps internet connectivity is down." ;\
-		exit $${rc} ;\
-	fi
-	touch $@
+# actual work
+.PHONY: $(FULL_NAME)-build
+$(FULL_NAME)-build:
+	docker build -t zenoss/$(FULL_NAME)-build:$(VERSION) hack
 
 
-# Download godep source to $GOPATH/src/.
-$(GOSRC)/$(godep_SRC):
-	go get $(godep_SRC)
+stage_pkg: $(FULL_NAME)
+	mkdir -p /tmp/pkgroot/usr/bin
+	cp -v $(FULL_NAME) /tmp/pkgroot/usr/bin
 
-missing_godep_SRC = $(filter-out $(wildcard $(GOSRC)/$(godep_SRC)), $(GOSRC)/$(godep_SRC))
-$(GODEP): | $(missing_godep_SRC)
-	go install $(godep_SRC)
+tgz: stage_pkg
+	tar cvfz /tmp/$(FULL_NAME)-$(GIT_COMMIT).tgz -C /tmp/pkgroot/usr .
+	chown $(DUID):$(DGID) /tmp/$(FULL_NAME)-$(GIT_COMMIT).tgz
+	cp -p /tmp/$(FULL_NAME)-$(GIT_COMMIT).tgz .
 
-.PHONY: clean_godeps
-clean_godeps: | $(GODEP) $(Godeps)
-	-$(GODEP) restore && go clean -r && go clean -i github.com/zenoss/zminion/... # this cleans all dependencies
-	@if [ -f "$(Godeps_restored)" ];then \
-		rm -f $(Godeps_restored) ;\
-		echo "rm -f $(Godeps_restored)" ;\
-	fi
+deb: stage_pkg
+	fpm \
+		-n $(FULL_NAME) \
+		-v $(VERSION) \
+		-s dir \
+		-t deb \
+		-a x86_64 \
+		-C $(PKGROOT) \
+		-m $(MAINTAINER) \
+		--description "$(DESCRIPTION)" \
+		--deb-user root \
+		--deb-group root \
+		--license $(DEB_LICENSE) \
+		--vendor $(VENDOR) \
+		--url $(URL) \
+		-f -p /tmp \
+		.
+	chown $(DUID):$(DGID) /tmp/*.deb
+	cp -p /tmp/*.deb .
 
+rpm: stage_pkg
+	fpm \
+		-n $(FULL_NAME) \
+		-v $(VERSION) \
+		-s dir \
+		-t rpm \
+		-a x86_64 \
+		-C $(PKGROOT) \
+		-m $(MAINTAINER) \
+		--description "$(DESCRIPTION)" \
+		--rpm-user root \
+		--rpm-group root \
+		--license $(RPM_LICENSE) \
+		--vendor $(VENDOR) \
+		--url $(URL) \
+		-f -p /tmp \
+		.
+	chown $(DUID):$(DGID) /tmp/*.rpm
+	cp -p /tmp/*.rpm .
 
-.PHONY: build
-build: zminion
-
-zminion: $(Godeps_restored)
-	$(GODEP) restore $(PACKAGE)
-	go build ${LDFLAGS}
-	#go install
-
-zminion = $(GOBIN)/zminion
-$(zminion): $(Godeps_restored)
-$(zminion): FORCE
-	go install ${LDFLAGS}
-
-
-.PHONY: install
-install: zminion
-	mkdir -p $(PREFIX)/bin
-	install -m 755 zminion $(PREFIX)/bin/zminion
-
-.PHONY: test
-test:
-	@go get $(PACKAGE)
-	@go test $(PACKAGE)
-
-.PHONY: clean
-clean: clean_godeps
-	@go clean
+clean:
+	go clean
+	rm -f *.deb
+	rm -f *.rpm
+	rm -f *.tgz
 
