@@ -1,6 +1,6 @@
 {
 	"ImportPath": "github.com/zenoss/zminion",
-	"GoVersion": "go1.2",
+	"GoVersion": "go1.3",
 	"Deps": [
 		{
 			"ImportPath": "github.com/codegangsta/cli",
