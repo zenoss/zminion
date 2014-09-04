@@ -14,7 +14,8 @@
 # along with Foobar. If not, see <http://www.gnu.org/licenses/>.
 
 ## setup all environment stuff
-FULL_NAME     = zminion
+URL           = https://github.com/zenoss/zminion
+FULL_NAME     = $(shell basename $(URL))
 VERSION      := $(shell cat ./VERSION)
 DATE         := $(shell date -u)
 GIT_COMMIT   ?= $(shell ./hack/gitstatus.sh)
@@ -29,12 +30,13 @@ DEB_LICENSE   = "GPL-2.0"
 # https://fedoraproject.org/wiki/Licensing:Main?rd=Licensing
 RPM_LICENSE   = "GPLv2"
 VENDOR        = Zenoss
-URL           = https://github.com/zenoss/zminion
-PKGROOT       = /tmp/pkgroot
+PKGROOT       = /tmp/$(FULL_NAME)-pkgroot-$(GIT_COMMIT)
 DUID         ?= $(shell id -u)
 DGID         ?= $(shell id -g)
 DESCRIPTION  := A simple shell execution client/server using redis
 GODEPS_FILES := $(shell find Godeps/)
+FULL_PATH     = $(shell echo $URL | sed 's|https:/||')
+DOCKER_WDIR  := /go/src$(FULL_PATH)
 
 
 ## generic workhorse targets
@@ -43,13 +45,13 @@ $(FULL_NAME): VERSION *.go hack/* makefile $(GODEPS_FILES)
 	chown $(DUID):$(DGID) $(FULL_NAME)
 
 docker-tgz: $(FULL_NAME)-build
-	docker run --rm -v `pwd`:/go/src/github.com/zenoss/$(FULL_NAME) -e DUID=$(DUID) -e DGID=$(DGID) zenoss/$(FULL_NAME)-build:$(VERSION) make tgz
+	docker run --rm -v `pwd`:$(DOCKER_WDIR) -w $(DOCKER_WDIR) -e DUID=$(DUID) -e DGID=$(DGID) zenoss/$(FULL_NAME)-build:$(VERSION) make tgz
 
 docker-deb: $(FULL_NAME)-build
-	docker run --rm -v `pwd`:/go/src/github.com/zenoss/$(FULL_NAME) -e DUID=$(DUID) -e DGID=$(DGID) zenoss/$(FULL_NAME)-build:$(VERSION) make deb
+	docker run --rm -v `pwd`:$(DOCKER_WDIR) -w $(DOCKER_WDIR) -e DUID=$(DUID) -e DGID=$(DGID) zenoss/$(FULL_NAME)-build:$(VERSION) make deb
 
 docker-rpm: $(FULL_NAME)-build
-	docker run --rm -v `pwd`:/go/src/github.com/zenoss/$(FULL_NAME) -e DUID=$(DUID) -e DGID=$(DGID) zenoss/$(FULL_NAME)-build:$(VERSION) make rpm
+	docker run --rm -v `pwd`:$(DOCKER_WDIR) -w $(DOCKER_WDIR) -e DUID=$(DUID) -e DGID=$(DGID) zenoss/$(FULL_NAME)-build:$(VERSION) make rpm
 
 # actual work
 .PHONY: $(FULL_NAME)-build
@@ -58,13 +60,13 @@ $(FULL_NAME)-build:
 
 
 stage_pkg: $(FULL_NAME)
-	mkdir -p /tmp/pkgroot/usr/bin
-	cp -v $(FULL_NAME) /tmp/pkgroot/usr/bin
+	mkdir -p $(PKGROOT)/usr/bin
+	cp -v $(FULL_NAME) $(PKGROOT)/usr/bin
 
 tgz: stage_pkg
-	tar cvfz /tmp/$(FULL_NAME)-$(GIT_COMMIT).tgz -C /tmp/pkgroot/usr .
+	tar cvfz /tmp/$(FULL_NAME)-$(GIT_COMMIT).tgz -C $(PKGROOT)/usr .
 	chown $(DUID):$(DGID) /tmp/$(FULL_NAME)-$(GIT_COMMIT).tgz
-	cp -p /tmp/$(FULL_NAME)-$(GIT_COMMIT).tgz .
+	mv /tmp/$(FULL_NAME)-$(GIT_COMMIT).tgz .
 
 deb: stage_pkg
 	fpm \
@@ -111,4 +113,6 @@ clean:
 	rm -f *.deb
 	rm -f *.rpm
 	rm -f *.tgz
+	rm -fr $(PKGROOT)
+
 
