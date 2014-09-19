@@ -76,17 +76,19 @@ func (s *ShellService) createCommand(c string) Command {
 }
 
 // getOutput retrives the output from the oCommand and
-func (s *ShellService) getOutput(outputChan chan CommandOutput, oCommand Command) {
+func (s *ShellService) getOutput(outputChan chan CommandOutput, oCommand Command, timeout uint) {
 	conn, err := s.getConnection()
 	if err != nil {
+		glog.Errorf("unable to get a connection for %+v: %s", s, err)
 		return
 	}
 	defer conn.Close()
 	glog.Infof("waiting for response for %s", oCommand.ReturnQueue)
 	for {
 		// BLPOP always return 2 items, list name + item
-		replies, err := redis.Strings(conn.Do("BLPOP", oCommand.ReturnQueue, 30))
+		replies, err := redis.Strings(conn.Do("BLPOP", oCommand.ReturnQueue, timeout))
 		if err != nil {
+			glog.Errorf("unexpected error from BLPOP: %s", err)
 			break
 		}
 		if len(replies) != 2 {
@@ -103,19 +105,21 @@ func (s *ShellService) getOutput(outputChan chan CommandOutput, oCommand Command
 }
 
 // sendCommand will send the command to the redis queue and return a channel to get the result
-func (s *ShellService) sendCommand(conn redis.Conn, c Command) (chan CommandOutput, error) {
+func (s *ShellService) sendCommand(conn redis.Conn, c Command, timeout uint) (chan CommandOutput, error) {
 
 	b, err := json.Marshal(c)
 	if err != nil {
+		glog.Errorf("unable to marshal cmd '%+v' err: %s", c, err)
 		return nil, err
 	}
 	conn.Send("RPUSH", s.name, string(b))
-	conn.Send("EXPIRE", s.name, 120)
+	conn.Send("EXPIRE", s.name, timeout)
 	if err := conn.Flush(); err != nil {
+		glog.Errorf("unable to flush connection '%+v' err: %s", conn, err)
 		return nil, err
 	}
 	output := make(chan CommandOutput, 10)
-	go s.getOutput(output, c)
+	go s.getOutput(output, c, timeout)
 	return output, nil
 }
 
@@ -125,16 +129,17 @@ func (s *ShellService) getConnection() (redis.Conn, error) {
 }
 
 // Run sends a command to the redis queue then listens for the execution output
-func (s *ShellService) Run(cmd string, printQueueName bool) error {
+func (s *ShellService) Run(cmd string, printQueueName bool, timeout uint) error {
 	conn, err := s.getConnection()
 	if err != nil {
+		glog.Errorf("unable to getConnection to %+v err: %s", s, err)
 		return err
 	}
 	defer conn.Close()
 
 	// send command to broker
 	command := s.createCommand(cmd)
-	output, err := s.sendCommand(conn, command)
+	output, err := s.sendCommand(conn, command, timeout)
 	if err != nil {
 		return err
 	}
@@ -159,9 +164,10 @@ func (s *ShellService) Run(cmd string, printQueueName bool) error {
 }
 
 // shellExecutorProcess executes the given command and sends output to redis
-func (s *ShellService) shellExecutorProcess(msg Command, closing chan bool, returnErr chan error, maxSeconds int) {
+func (s *ShellService) shellExecutorProcess(msg Command, closing chan bool, returnErr chan error, maxSeconds uint) {
 	c, err := s.getConnection()
 	if err != nil {
+		glog.Errorf("unable to getConnection to %+v err: %s", s, err)
 		returnErr <- err
 		return
 	}
@@ -201,8 +207,8 @@ func (s *ShellService) shellExecutorProcess(msg Command, closing chan bool, retu
 		msgStr, _ := json.Marshal(cMsg)
 		glog.V(1).Infof("sending to %s: %s", msg.ReturnQueue, msgStr)
 		c.Send("RPUSH", msg.ReturnQueue, string(msgStr))
-		// reader should pick this up in less than 600 seconds
-		c.Send("EXPIRE", msg.ReturnQueue, 600)
+		// reader should pick this up in less than maxSeconds seconds
+		c.Send("EXPIRE", msg.ReturnQueue, maxSeconds)
 		c.Flush()
 	}
 	for {
@@ -254,7 +260,7 @@ func (s *ShellService) shellExecutorProcess(msg Command, closing chan bool, retu
 }
 
 // shellExecutor manages the execution of a shell commmand
-func (s *ShellService) shellExecutor(cmdChan chan Command, maxSeconds int) {
+func (s *ShellService) shellExecutor(cmdChan chan Command, maxSeconds uint) {
 
 	var returnErr chan error
 	oCmdChan := cmdChan
@@ -278,7 +284,7 @@ func (s *ShellService) shellExecutor(cmdChan chan Command, maxSeconds int) {
 	}
 }
 
-func (s *ShellService) Serve(executors int, maxSeconds int) error {
+func (s *ShellService) Serve(executors int, maxSeconds uint) error {
 	glog.V(2).Info("Serve")
 
 	cmdChan := make(chan Command)
@@ -296,8 +302,10 @@ func (s *ShellService) Serve(executors int, maxSeconds int) error {
 		func(conn redis.Conn) {
 			defer conn.Close()
 			for {
-				response, err := redis.Strings(c.Do("BLPOP", s.name, 10))
+				glog.Warningf("calling BLPOP of %s waiting %d seconds", s.name, maxSeconds)
+				response, err := redis.Strings(c.Do("BLPOP", s.name, maxSeconds))
 				if err != nil {
+					glog.Warningf("BLPOP of %s timed out waiting %d seconds", s.name, maxSeconds)
 					return
 				}
 				glog.Infof("len(response) = %d", len(response))
@@ -318,6 +326,8 @@ func (s *ShellService) Serve(executors int, maxSeconds int) error {
 var Version string
 
 func main() {
+	var COMMAND_TIMEOUT uint = 60 * 60 // 1 hour
+
 	app := cli.NewApp()
 	app.Name = "zminion"
 	app.Usage = "a client for distributed bash executions"
@@ -334,8 +344,8 @@ func main() {
 				},
 				cli.IntFlag{
 					Name:  "max-seconds",
-					Value: 120,
-					Usage: "maxinum number of seconds subpocess can execute",
+					Value: int(COMMAND_TIMEOUT),
+					Usage: "maxinum number of seconds subprocess can execute",
 				},
 			},
 			Action: func(c *cli.Context) {
@@ -343,7 +353,7 @@ func main() {
 					redisAddress: c.GlobalString("redis-address"),
 					name:         "minion-send-" + c.GlobalString("minion-name"),
 				}
-				shellService.Serve(c.Int("n"), c.Int("max-seconds"))
+				shellService.Serve(c.Int("n"), uint(c.Int("max-seconds")))
 			},
 		},
 		{
@@ -353,6 +363,11 @@ func main() {
 				cli.BoolFlag{
 					Name:  "send-only",
 					Usage: "print the name of the return queue and don't print the output",
+				},
+				cli.IntFlag{
+					Name:  "max-seconds",
+					Value: int(COMMAND_TIMEOUT),
+					Usage: "maxinum number of seconds subprocess can execute",
 				},
 			},
 			Action: func(c *cli.Context) {
@@ -364,7 +379,7 @@ func main() {
 				if len(args) < 1 {
 					glog.Fatalf("run requires an argument")
 				}
-				shellService.Run(args[0], c.Bool("send-only"))
+				shellService.Run(args[0], c.Bool("send-only"), uint(c.Int("max-seconds")))
 			},
 		},
 	}
