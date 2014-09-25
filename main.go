@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/codegangsta/cli"
@@ -379,7 +380,7 @@ func main() {
 				if len(args) < 1 {
 					glog.Fatalf("run requires an argument")
 				}
-				shellService.Run(args[0], c.Bool("send-only"), uint(c.Int("max-seconds")))
+				shellService.Run(strings.Join(args, " "), c.Bool("send-only"), uint(c.Int("max-seconds")))
 			},
 		},
 	}
