@@ -85,24 +85,26 @@ func (s *ShellService) getOutput(outputChan chan CommandOutput, oCommand Command
 	}
 	defer conn.Close()
 	glog.Infof("waiting for response for %s", oCommand.ReturnQueue)
+	defer close(outputChan)
 	for {
 		// BLPOP always return 2 items, list name + item
-		replies, err := redis.Strings(conn.Do("BLPOP", oCommand.ReturnQueue, timeout))
+		reply, err := conn.Do("BLPOP", oCommand.ReturnQueue, timeout)
+		if reply == nil && err == nil {
+			glog.Fatal("Command timed out.")
+		}
+		replies, err := redis.Strings(reply, err)
 		if err != nil {
 			glog.Errorf("unexpected error from BLPOP: %s", err)
-			close(outputChan)
-			break
+			continue
 		}
 		if len(replies) != 2 {
 			glog.Info("unexpected return from BLPOP")
-			close(outputChan)
-			break
+			continue
 		}
 		var output CommandOutput
 		if err := json.Unmarshal([]byte(replies[1]), &output); err != nil {
 			glog.Errorf("Could not unmarshal response: %s", err)
-			close(outputChan)
-			break
+			continue
 		}
 		outputChan <- output
 	}
@@ -143,7 +145,7 @@ func (s *ShellService) Run(cmd string, printQueueName bool, timeout uint) error 
 
 	// send command to broker
 	command := s.createCommand(cmd)
-	output, err := s.sendCommand(conn, command, timeout)
+	outputChan, err := s.sendCommand(conn, command, timeout)
 	if err != nil {
 		return err
 	}
@@ -153,7 +155,7 @@ func (s *ShellService) Run(cmd string, printQueueName bool, timeout uint) error 
 		return nil
 	}
 	for {
-		output, ok := <-output
+		output, ok := <-outputChan
 		if !ok {
 			return nil
 		}
