@@ -90,15 +90,18 @@ func (s *ShellService) getOutput(outputChan chan CommandOutput, oCommand Command
 		replies, err := redis.Strings(conn.Do("BLPOP", oCommand.ReturnQueue, timeout))
 		if err != nil {
 			glog.Errorf("unexpected error from BLPOP: %s", err)
+			close(outputChan)
 			break
 		}
 		if len(replies) != 2 {
 			glog.Info("unexpected return from BLPOP")
+			close(outputChan)
 			break
 		}
 		var output CommandOutput
 		if err := json.Unmarshal([]byte(replies[1]), &output); err != nil {
 			glog.Errorf("Could not unmarshal response: %s", err)
+			close(outputChan)
 			break
 		}
 		outputChan <- output
