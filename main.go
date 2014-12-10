@@ -5,6 +5,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -78,6 +79,7 @@ func (s *ShellService) createCommand(c string) Command {
 
 // getOutput retrives the output from the oCommand and
 func (s *ShellService) getOutput(outputChan chan CommandOutput, oCommand Command, timeout uint) {
+	defer close(outputChan)
 	conn, err := s.getConnection()
 	if err != nil {
 		glog.Errorf("unable to get a connection for %+v: %s", s, err)
@@ -85,26 +87,26 @@ func (s *ShellService) getOutput(outputChan chan CommandOutput, oCommand Command
 	}
 	defer conn.Close()
 	glog.Infof("waiting for response for %s", oCommand.ReturnQueue)
-	defer close(outputChan)
 	for {
 		// BLPOP always return 2 items, list name + item
 		reply, err := conn.Do("BLPOP", oCommand.ReturnQueue, timeout)
 		if reply == nil && err == nil {
-			glog.Fatal("Command timed out.")
+			glog.Error("Command timed out.")
+			break
 		}
 		replies, err := redis.Strings(reply, err)
 		if err != nil {
 			glog.Errorf("unexpected error from BLPOP: %s", err)
-			continue
+			break
 		}
 		if len(replies) != 2 {
 			glog.Info("unexpected return from BLPOP")
-			continue
+			break
 		}
 		var output CommandOutput
 		if err := json.Unmarshal([]byte(replies[1]), &output); err != nil {
 			glog.Errorf("Could not unmarshal response: %s", err)
-			continue
+			break
 		}
 		outputChan <- output
 	}
@@ -157,7 +159,7 @@ func (s *ShellService) Run(cmd string, printQueueName bool, timeout uint) error 
 	for {
 		output, ok := <-outputChan
 		if !ok {
-			return nil
+			return errors.New("Output channel closed unexpectedly.")
 		}
 		fmt.Fprintf(os.Stdout, output.Stdout)
 		fmt.Fprintf(os.Stderr, output.Stderr)
@@ -385,7 +387,10 @@ func main() {
 				if len(args) < 1 {
 					glog.Fatalf("run requires an argument")
 				}
-				shellService.Run(strings.Join(args, " "), c.Bool("send-only"), uint(c.Int("max-seconds")))
+				err := shellService.Run(strings.Join(args, " "), c.Bool("send-only"), uint(c.Int("max-seconds")))
+				if err != nil {
+					os.Exit(555)
+				}
 			},
 		},
 	}
