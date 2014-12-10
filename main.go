@@ -389,7 +389,8 @@ func main() {
 				}
 				err := shellService.Run(strings.Join(args, " "), c.Bool("send-only"), uint(c.Int("max-seconds")))
 				if err != nil {
-					os.Exit(555)
+					glog.Warningf("%v", err)
+					os.Exit(100)
 				}
 			},
 		},
