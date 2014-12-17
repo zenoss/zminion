@@ -5,6 +5,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -78,6 +79,7 @@ func (s *ShellService) createCommand(c string) Command {
 
 // getOutput retrives the output from the oCommand and
 func (s *ShellService) getOutput(outputChan chan CommandOutput, oCommand Command, timeout uint) {
+	defer close(outputChan)
 	conn, err := s.getConnection()
 	if err != nil {
 		glog.Errorf("unable to get a connection for %+v: %s", s, err)
@@ -87,7 +89,12 @@ func (s *ShellService) getOutput(outputChan chan CommandOutput, oCommand Command
 	glog.Infof("waiting for response for %s", oCommand.ReturnQueue)
 	for {
 		// BLPOP always return 2 items, list name + item
-		replies, err := redis.Strings(conn.Do("BLPOP", oCommand.ReturnQueue, timeout))
+		reply, err := conn.Do("BLPOP", oCommand.ReturnQueue, timeout)
+		if reply == nil && err == nil {
+			glog.Error("Command timed out.")
+			break
+		}
+		replies, err := redis.Strings(reply, err)
 		if err != nil {
 			glog.Errorf("unexpected error from BLPOP: %s", err)
 			break
@@ -140,7 +147,7 @@ func (s *ShellService) Run(cmd string, printQueueName bool, timeout uint) error 
 
 	// send command to broker
 	command := s.createCommand(cmd)
-	output, err := s.sendCommand(conn, command, timeout)
+	outputChan, err := s.sendCommand(conn, command, timeout)
 	if err != nil {
 		return err
 	}
@@ -150,9 +157,9 @@ func (s *ShellService) Run(cmd string, printQueueName bool, timeout uint) error 
 		return nil
 	}
 	for {
-		output, ok := <-output
+		output, ok := <-outputChan
 		if !ok {
-			return nil
+			return errors.New("Output channel closed unexpectedly.")
 		}
 		fmt.Fprintf(os.Stdout, output.Stdout)
 		fmt.Fprintf(os.Stderr, output.Stderr)
@@ -380,7 +387,11 @@ func main() {
 				if len(args) < 1 {
 					glog.Fatalf("run requires an argument")
 				}
-				shellService.Run(strings.Join(args, " "), c.Bool("send-only"), uint(c.Int("max-seconds")))
+				err := shellService.Run(strings.Join(args, " "), c.Bool("send-only"), uint(c.Int("max-seconds")))
+				if err != nil {
+					glog.Warningf("%v", err)
+					os.Exit(100)
+				}
 			},
 		},
 	}
