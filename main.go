@@ -77,6 +77,14 @@ func (s *ShellService) createCommand(c string) Command {
 	}
 }
 
+func newShellService(c *cli.Context) *ShellService {
+	return &ShellService{
+		redisAddress: c.GlobalString("redis-address"),
+		name:         "minion-send-" + c.GlobalString("minion-name"),
+		readTimeout:  time.Duration(c.Int("read-timeout")) * time.Second,
+	}
+}
+
 // getOutput retrives the output from the oCommand and
 func (s *ShellService) getOutput(outputChan chan CommandOutput, oCommand Command, timeout uint) {
 	defer close(outputChan)
@@ -302,7 +310,7 @@ func (s *ShellService) Serve(executors int, maxSeconds uint) error {
 	defer close(cmdChan)
 	for {
 
-		c, err := redis.DialTimeout("tcp", s.redisAddress, s.connectTimeout, s.readTimeout, s.writeTimeout)
+		c, err := s.getConnection()
 		if err != nil {
 			time.Sleep(time.Second)
 			continue
@@ -312,8 +320,11 @@ func (s *ShellService) Serve(executors int, maxSeconds uint) error {
 			for {
 				glog.Warningf("calling BLPOP of %s waiting %d seconds", s.name, maxSeconds)
 				response, err := redis.Strings(c.Do("BLPOP", s.name, maxSeconds))
-				if err != nil {
+				if err == redis.ErrNil {
 					glog.Warningf("BLPOP of %s timed out waiting %d seconds", s.name, maxSeconds)
+					return
+				} else if err != nil {
+					glog.Warningf("Resetting %s connection: %s", s.name, err)
 					return
 				}
 				glog.Infof("len(response) = %d", len(response))
@@ -335,6 +346,7 @@ var Version string
 
 func main() {
 	var COMMAND_TIMEOUT uint = 60 * 60 // 1 hour
+	var READ_TIMEOUT int = 60 * 10     // 10 minutes
 
 	app := cli.NewApp()
 	app.Name = "zminion"
@@ -353,14 +365,16 @@ func main() {
 				cli.IntFlag{
 					Name:  "max-seconds",
 					Value: int(COMMAND_TIMEOUT),
-					Usage: "maxinum number of seconds subprocess can execute",
+					Usage: "maximum number of seconds subprocess can execute",
+				},
+				cli.IntFlag{
+					Name:  "read-timeout",
+					Value: READ_TIMEOUT,
+					Usage: "maximum number of seconds Redis connection will wait for the input",
 				},
 			},
 			Action: func(c *cli.Context) {
-				shellService := ShellService{
-					redisAddress: c.GlobalString("redis-address"),
-					name:         "minion-send-" + c.GlobalString("minion-name"),
-				}
+				shellService := newShellService(c)
 				shellService.Serve(c.Int("n"), uint(c.Int("max-seconds")))
 			},
 		},
@@ -375,14 +389,11 @@ func main() {
 				cli.IntFlag{
 					Name:  "max-seconds",
 					Value: int(COMMAND_TIMEOUT),
-					Usage: "maxinum number of seconds subprocess can execute",
+					Usage: "maximum number of seconds subprocess can execute",
 				},
 			},
 			Action: func(c *cli.Context) {
-				shellService := ShellService{
-					redisAddress: c.GlobalString("redis-address"),
-					name:         "minion-send-" + c.GlobalString("minion-name"),
-				}
+				shellService := newShellService(c)
 				args := c.Args()
 				if len(args) < 1 {
 					glog.Fatalf("run requires an argument")
