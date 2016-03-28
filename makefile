@@ -109,7 +109,6 @@ rpm: stage_pkg
 	cp -p /tmp/*.rpm .
 
 clean:
-	go clean
 	rm -f *.deb
 	rm -f *.rpm
 	rm -f *.tgz
