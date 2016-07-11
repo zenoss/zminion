@@ -44,6 +44,9 @@ $(FULL_NAME): VERSION *.go hack/* makefile $(GODEPS_FILES)
 	godep go build ${LDFLAGS}
 	chown $(DUID):$(DGID) $(FULL_NAME)
 
+docker-build: $(FULL_NAME)-build
+	docker run --rm -v `pwd`:$(DOCKER_WDIR) -w $(DOCKER_WDIR) -e DUID=$(DUID) -e DGID=$(DGID) zenoss/$(FULL_NAME)-build:$(VERSION) make
+
 docker-tgz: $(FULL_NAME)-build
 	docker run --rm -v `pwd`:$(DOCKER_WDIR) -w $(DOCKER_WDIR) -e DUID=$(DUID) -e DGID=$(DGID) zenoss/$(FULL_NAME)-build:$(VERSION) make tgz
 
@@ -64,9 +67,9 @@ stage_pkg: $(FULL_NAME)
 	cp -v $(FULL_NAME) $(PKGROOT)/usr/bin
 
 tgz: stage_pkg
-	tar cvfz /tmp/$(FULL_NAME)-$(GIT_COMMIT).tgz -C $(PKGROOT)/usr .
-	chown $(DUID):$(DGID) /tmp/$(FULL_NAME)-$(GIT_COMMIT).tgz
-	mv /tmp/$(FULL_NAME)-$(GIT_COMMIT).tgz .
+	tar cvfz /tmp/$(FULL_NAME)-$(VERSION).tgz -C $(PKGROOT)/usr .
+	chown $(DUID):$(DGID) /tmp/$(FULL_NAME)-$(VERSION).tgz
+	mv /tmp/$(FULL_NAME)-$(VERSION).tgz .
 
 deb: stage_pkg
 	fpm \
