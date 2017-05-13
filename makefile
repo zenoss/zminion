@@ -44,19 +44,11 @@ LDFLAGS = -ldflags "\
 	-X main.Date=$(DATE)  \
 	-X main.Buildtag=$(BUILD_TAG)"
 
-MAINTAINER    = dev@zenoss.com
-# https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/#license-specification
-DEB_LICENSE   = "GPL-2.0"
-# https://fedoraproject.org/wiki/Licensing:Main?rd=Licensing
-RPM_LICENSE   = "GPLv2"
-VENDOR        = Zenoss
 PKGROOT       = /tmp/$(FULL_NAME)-pkgroot-$(GIT_COMMIT)
 DUID         ?= $(shell id -u)
 DGID         ?= $(shell id -g)
-DESCRIPTION  := A simple shell execution client/server using redis
 GOSOURCEFILES := $(shell find `go list -f '{{.Dir}}' ./... | grep -v /vendor/` -maxdepth 1 -name \*.go)
 FULL_PATH     = $(shell echo $(URL) | sed 's|https:/||')
-DOCKER_WDIR  := /go/src$(FULL_PATH)
 
 .PHONY: build
 build: goversion $(FULL_NAME)
@@ -66,31 +58,12 @@ $(FULL_NAME): VERSION *.go hack/* makefile $(GOSOURCEFILES)
 	$(GO) build ${LDFLAGS} -o $(FULL_NAME) .
 	chown $(DUID):$(DGID) $(FULL_NAME)
 
-docker-build: $(FULL_NAME)-build
-	docker run --rm -v `pwd`:$(DOCKER_WDIR) -w $(DOCKER_WDIR) -e DUID=$(DUID) -e DGID=$(DGID) zenoss/$(FULL_NAME)-build:$(VERSION) make
-
-docker-tgz: $(FULL_NAME)-build
-	docker run --rm -v `pwd`:$(DOCKER_WDIR) -w $(DOCKER_WDIR) -e DUID=$(DUID) -e DGID=$(DGID) zenoss/$(FULL_NAME)-build:$(VERSION) make tgz
-
-docker-deb: $(FULL_NAME)-build
-	docker run --rm -v `pwd`:$(DOCKER_WDIR) -w $(DOCKER_WDIR) -e DUID=$(DUID) -e DGID=$(DGID) zenoss/$(FULL_NAME)-build:$(VERSION) make deb
-
-docker-rpm: $(FULL_NAME)-build
-	docker run --rm -v `pwd`:$(DOCKER_WDIR) -w $(DOCKER_WDIR) -e DUID=$(DUID) -e DGID=$(DGID) zenoss/$(FULL_NAME)-build:$(VERSION) make rpm
-
-
 # Verify that we are running with the right go version
 .PHONY: goversion
 goversion:
 ifeq "$(shell go version | grep $(MIN_GO_VERSION))" ""
         $(error "Build requires go version $(MIN_GO_VERSION)")
 endif
-
-# actual work
-.PHONY: $(FULL_NAME)-build
-$(FULL_NAME)-build:
-	docker build -t zenoss/$(FULL_NAME)-build:$(VERSION) hack
-
 
 stage_pkg: $(FULL_NAME)
 	mkdir -p $(PKGROOT)/usr/bin
@@ -100,46 +73,6 @@ tgz: stage_pkg
 	tar cvfz /tmp/$(FULL_NAME)-$(VERSION).tgz -C $(PKGROOT)/usr .
 	chown $(DUID):$(DGID) /tmp/$(FULL_NAME)-$(VERSION).tgz
 	mv /tmp/$(FULL_NAME)-$(VERSION).tgz .
-
-deb: stage_pkg
-	fpm \
-		-n $(FULL_NAME) \
-		-v $(VERSION) \
-		-s dir \
-		-t deb \
-		-a x86_64 \
-		-C $(PKGROOT) \
-		-m $(MAINTAINER) \
-		--description "$(DESCRIPTION)" \
-		--deb-user root \
-		--deb-group root \
-		--license $(DEB_LICENSE) \
-		--vendor $(VENDOR) \
-		--url $(URL) \
-		-f -p /tmp \
-		.
-	chown $(DUID):$(DGID) /tmp/*.deb
-	cp -p /tmp/*.deb .
-
-rpm: stage_pkg
-	fpm \
-		-n $(FULL_NAME) \
-		-v $(VERSION) \
-		-s dir \
-		-t rpm \
-		-a x86_64 \
-		-C $(PKGROOT) \
-		-m $(MAINTAINER) \
-		--description "$(DESCRIPTION)" \
-		--rpm-user root \
-		--rpm-group root \
-		--license $(RPM_LICENSE) \
-		--vendor $(VENDOR) \
-		--url $(URL) \
-		-f -p /tmp \
-		.
-	chown $(DUID):$(DGID) /tmp/*.rpm
-	cp -p /tmp/*.rpm .
 
 clean:
 	rm -f *.deb

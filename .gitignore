@@ -27,7 +27,7 @@ _testmain.go
 
 *.exe
 *.test
-
+*.tgz
 *.iml
 
 # IntelliJ workspace files
