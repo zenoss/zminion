@@ -342,7 +342,14 @@ func (s *ShellService) Serve(executors int, maxSeconds uint) error {
 	return nil
 }
 
-var Version string
+var (
+	Version   string
+	GoVersion string
+	Date      string
+	Gitcommit string
+	Gitbranch string
+	Buildtag  string
+)
 
 func main() {
 	var COMMAND_TIMEOUT uint = 60 * 60 // 1 hour
@@ -405,6 +412,14 @@ func main() {
 				}
 			},
 		},
+		{
+			Name:   "version",
+			Usage:  "shows version information",
+			Action: func(c *cli.Context) {
+				shellService := newShellService(c)
+				shellService.Version(c)
+			},
+		},
 	}
 	app.Flags = []cli.Flag{
 		cli.StringFlag{
@@ -419,4 +434,13 @@ func main() {
 		},
 	}
 	app.Run(os.Args)
+}
+
+func (c *ShellService) Version(ctx *cli.Context) {
+	fmt.Printf("Version:    %s\n", Version)
+	fmt.Printf("GoVersion:  %s\n", GoVersion)
+	fmt.Printf("Gitcommit:  %s\n", Gitcommit)
+	fmt.Printf("Gitbranch:  %s\n", Gitbranch)
+	fmt.Printf("Date:       %s\n", Date)
+	fmt.Printf("Buildtag:   %s\n", Buildtag)
 }

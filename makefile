@@ -41,6 +41,7 @@ LDFLAGS = -ldflags "\
 	-X main.Version=$(VERSION) \
 	-X main.Gitcommit=$(GIT_COMMIT) \
 	-X main.Gitbranch=$(GIT_BRANCH) \
+	-X main.GoVersion=$(GO_VERSION) \
 	-X main.Date=$(DATE)  \
 	-X main.Buildtag=$(BUILD_TAG)"
 
