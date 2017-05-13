@@ -27,3 +27,8 @@ _testmain.go
 
 *.exe
 *.test
+
+*.iml
+
+# IntelliJ workspace files
+.idea
