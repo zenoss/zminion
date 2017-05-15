@@ -17,6 +17,7 @@ import (
 	"github.com/control-center/serviced/utils"
 	"github.com/garyburd/redigo/redis"
 	"github.com/zenoss/glog"
+	"net"
 )
 
 type ShellService struct {
@@ -325,9 +326,15 @@ func (s *ShellService) Serve(executors int, maxSeconds uint)  {
 					response, err := redis.Strings(c.Do("BLPOP", s.name, maxSeconds))
 					if err == redis.ErrNil {
 						glog.Warningf("BLPOP of %s timed out waiting %d seconds", s.name, maxSeconds)
+						backoff.Reset()
 						return
 					} else if err != nil {
 						glog.Warningf("Resetting %s connection: %s", s.name, err)
+						if err, ok := err.(net.Error); ok && err.Timeout() {
+							// a timeout just means there's no work to do, so don't spend
+							// a lot of time waiting before trying to get another connection
+							backoff.Reset()
+						}
 						return
 					}
 					glog.Infof("len(response) = %d", len(response))
@@ -362,11 +369,11 @@ var (
 
 func main() {
 	var COMMAND_TIMEOUT uint = 60 * 60	// 1 hour
-	var CONNECT_TIMEOUT int = 10		// 10 seconds
+	var CONNECT_TIMEOUT int = 5		// 5 seconds
 	var READ_TIMEOUT int = 60 * 10		// 10 minutes
-	var WRITE_TIMEOUT int = 0
-	var RECONNECT_START_DELAY int = 1
-	var RECONNECT_MAX_DELAY int = 1
+	var WRITE_TIMEOUT int = 0		// 0 seconds
+	var RECONNECT_START_DELAY int = 1	// 1 second
+	var RECONNECT_MAX_DELAY int = 90	// 90 seconds
 
 	app := cli.NewApp()
 	app.Name = "zminion"
