@@ -175,8 +175,6 @@ func (s *ShellService) Run(cmd string, printQueueName bool, timeout uint) error 
 			os.Exit(output.ExitCode)
 		}
 	}
-
-	return nil
 }
 
 // shellExecutorProcess executes the given command and sends output to redis
@@ -300,7 +298,7 @@ func (s *ShellService) shellExecutor(cmdChan chan Command, maxSeconds uint) {
 	}
 }
 
-func (s *ShellService) Serve(executors int, maxSeconds uint) error {
+func (s *ShellService) Serve(executors int, maxSeconds uint) {
 	glog.V(2).Info("Serve")
 
 	cmdChan := make(chan Command)
@@ -339,7 +337,6 @@ func (s *ShellService) Serve(executors int, maxSeconds uint) error {
 			}
 		}(c)
 	}
-	return nil
 }
 
 var (
