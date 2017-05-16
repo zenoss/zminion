@@ -326,6 +326,7 @@ func (s *ShellService) Serve(executors int, maxSeconds uint)  {
 					response, err := redis.Strings(c.Do("BLPOP", s.name, maxSeconds))
 					if err == redis.ErrNil {
 						glog.Warningf("BLPOP of %s timed out waiting %d seconds", s.name, maxSeconds)
+						// The network is working, use the minimum delay before reconnecting
 						backoff.Reset()
 						return
 					} else if err != nil {
