@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand"
 	"os"
 	"os/exec"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/control-center/serviced/utils"
 	"github.com/garyburd/redigo/redis"
 	"github.com/zenoss/glog"
+	"net"
 )
 
 type ShellService struct {
@@ -79,9 +81,11 @@ func (s *ShellService) createCommand(c string) Command {
 
 func newShellService(c *cli.Context) *ShellService {
 	return &ShellService{
-		redisAddress: c.GlobalString("redis-address"),
-		name:         "minion-send-" + c.GlobalString("minion-name"),
-		readTimeout:  time.Duration(c.Int("read-timeout")) * time.Second,
+		redisAddress:   c.GlobalString("redis-address"),
+		name:           "minion-send-" + c.GlobalString("minion-name"),
+		connectTimeout: time.Duration(c.Int("connect-timeout")) * time.Second,
+		readTimeout:    time.Duration(c.Int("read-timeout")) * time.Second,
+		writeTimeout:   time.Duration(c.Int("write-timeout")) * time.Second,
 	}
 }
 
@@ -141,6 +145,8 @@ func (s *ShellService) sendCommand(conn redis.Conn, c Command, timeout uint) (ch
 
 // getConnection returns a connection to redis
 func (s *ShellService) getConnection() (redis.Conn, error) {
+	glog.V(1).Infof("getConnection: connectTimeout=%2.1f readTimeout=%2.1f writeTimeout=%2.1f ",
+		s.connectTimeout.Seconds(), s.readTimeout.Seconds(), s.writeTimeout.Seconds())
 	return redis.DialTimeout("tcp", s.redisAddress, s.connectTimeout, s.readTimeout, s.writeTimeout)
 }
 
@@ -175,12 +181,11 @@ func (s *ShellService) Run(cmd string, printQueueName bool, timeout uint) error 
 			os.Exit(output.ExitCode)
 		}
 	}
-
-	return nil
 }
 
 // shellExecutorProcess executes the given command and sends output to redis
 func (s *ShellService) shellExecutorProcess(msg Command, closing chan bool, returnErr chan error, maxSeconds uint) {
+	glog.V(1).Infof("shellExecutorProcess getConnection for cmd=%q", msg)
 	c, err := s.getConnection()
 	if err != nil {
 		glog.Errorf("unable to getConnection to %+v err: %s", s, err)
@@ -221,7 +226,7 @@ func (s *ShellService) shellExecutorProcess(msg Command, closing chan bool, retu
 			ExitCode: exitCode,
 		}
 		msgStr, _ := json.Marshal(cMsg)
-		glog.V(1).Infof("sending to %s: %s", msg.ReturnQueue, msgStr)
+		glog.V(2).Infof("sending to %s: %s", msg.ReturnQueue, msgStr)
 		c.Send("RPUSH", msg.ReturnQueue, string(msgStr))
 		// reader should pick this up in less than maxSeconds seconds
 		c.Send("EXPIRE", msg.ReturnQueue, maxSeconds)
@@ -300,53 +305,76 @@ func (s *ShellService) shellExecutor(cmdChan chan Command, maxSeconds uint) {
 	}
 }
 
-func (s *ShellService) Serve(executors int, maxSeconds uint) error {
-	glog.V(2).Info("Serve")
+func (s *ShellService) Serve(executors int, maxSeconds uint)  {
+	glog.V(1).Infof("Serve: starting %d executors", executors)
 
 	cmdChan := make(chan Command)
 	for i := 0; i < executors; i++ {
 		go s.shellExecutor(cmdChan, maxSeconds)
 	}
 	defer close(cmdChan)
-	for {
 
+	backoff.Reset()
+	for {
+		glog.Infof("Serve: getConnection")
 		c, err := s.getConnection()
-		if err != nil {
-			time.Sleep(time.Second)
-			continue
+		if err == nil {
+			func(conn redis.Conn) {
+				defer conn.Close()
+				for {
+					glog.Warningf("calling BLPOP of %s waiting %d seconds", s.name, maxSeconds)
+					response, err := redis.Strings(c.Do("BLPOP", s.name, maxSeconds))
+					if err == redis.ErrNil {
+						glog.Warningf("BLPOP of %s timed out waiting %d seconds", s.name, maxSeconds)
+						// The network is working, use the minimum delay before reconnecting
+						backoff.Reset()
+						return
+					} else if err != nil {
+						glog.Warningf("Resetting %s connection: %s", s.name, err)
+						if err, ok := err.(net.Error); ok && err.Timeout() {
+							// a timeout just means there's no work to do, so don't spend
+							// a lot of time waiting before trying to get another connection
+							backoff.Reset()
+						}
+						return
+					}
+					glog.Infof("len(response) = %d", len(response))
+					var msg Command
+					err = json.Unmarshal([]byte(response[1]), &msg)
+					if err != nil {
+						glog.Errorf("Could not unmarshal: %s", err)
+						return
+					}
+					backoff.Reset()
+					glog.V(2).Infof("Got message: %s, %s", msg.Command, msg.ReturnQueue)
+					cmdChan <- msg
+				}
+			}(c)
 		}
-		func(conn redis.Conn) {
-			defer conn.Close()
-			for {
-				glog.Warningf("calling BLPOP of %s waiting %d seconds", s.name, maxSeconds)
-				response, err := redis.Strings(c.Do("BLPOP", s.name, maxSeconds))
-				if err == redis.ErrNil {
-					glog.Warningf("BLPOP of %s timed out waiting %d seconds", s.name, maxSeconds)
-					return
-				} else if err != nil {
-					glog.Warningf("Resetting %s connection: %s", s.name, err)
-					return
-				}
-				glog.Infof("len(response) = %d", len(response))
-				var msg Command
-				err = json.Unmarshal([]byte(response[1]), &msg)
-				if err != nil {
-					glog.Errorf("Could not unmarshal: %s", err)
-					return
-				}
-				glog.V(1).Infof("Got message: %s, %s", msg.Command, msg.ReturnQueue)
-				cmdChan <- msg
-			}
-		}(c)
+		delay := backoff.GetDelay()
+		glog.V(1).Infof("sleeping %2.1f second", delay.Seconds())
+		time.Sleep(delay)
 	}
-	return nil
 }
 
-var Version string
+var (
+	Version   string
+	GoVersion string
+	Date      string
+	Gitcommit string
+	Gitbranch string
+	Buildtag  string
+
+	backoff   *Backoff
+)
 
 func main() {
-	var COMMAND_TIMEOUT uint = 60 * 60 // 1 hour
-	var READ_TIMEOUT int = 60 * 10     // 10 minutes
+	var COMMAND_TIMEOUT uint = 60 * 60	// 1 hour
+	var CONNECT_TIMEOUT int = 5		// 5 seconds
+	var READ_TIMEOUT int = 60 * 10		// 10 minutes
+	var WRITE_TIMEOUT int = 0		// 0 seconds
+	var RECONNECT_START_DELAY int = 1	// 1 second
+	var RECONNECT_MAX_DELAY int = 90	// 90 seconds
 
 	app := cli.NewApp()
 	app.Name = "zminion"
@@ -368,12 +396,39 @@ func main() {
 					Usage: "maximum number of seconds subprocess can execute",
 				},
 				cli.IntFlag{
+					Name:  "connect-timeout",
+					Value: CONNECT_TIMEOUT,
+					Usage: "maximum number of seconds to wait for a connection to Redis",
+				},
+				cli.IntFlag{
 					Name:  "read-timeout",
 					Value: READ_TIMEOUT,
 					Usage: "maximum number of seconds Redis connection will wait for the input",
 				},
+				cli.IntFlag{
+					Name:  "write-timeout",
+					Value: WRITE_TIMEOUT,
+					Usage: "maximum number of seconds Redis connection will wait for the output",
+				},
+				cli.IntFlag{
+					Name:  "reconnect-start-delay",
+					Value: RECONNECT_START_DELAY,
+					Usage: "the initial delay in seconds before attempting to reconnect to Redis",
+				},
+				cli.IntFlag{
+					Name:  "reconnect-max-delay",
+					Value: RECONNECT_MAX_DELAY,
+					Usage: "the max delay in seconds before attempting to reconnect to Redis",
+				},
 			},
 			Action: func(c *cli.Context) {
+				glog.SetVerbosity(c.GlobalInt("verbose"))
+
+				backoff = &Backoff{
+					InitialDelay: time.Duration(c.Int("reconnect-start-delay")) * time.Second,
+					MaxDelay:     time.Duration(c.Int("reconnect-max-delay")) * time.Second,
+					random:       rand.New(rand.NewSource(time.Now().UnixNano())),
+				}
 				shellService := newShellService(c)
 				shellService.Serve(c.Int("n"), uint(c.Int("max-seconds")))
 			},
@@ -393,6 +448,7 @@ func main() {
 				},
 			},
 			Action: func(c *cli.Context) {
+				glog.SetVerbosity(c.GlobalInt("verbose"))
 				shellService := newShellService(c)
 				args := c.Args()
 				if len(args) < 1 {
@@ -403,6 +459,14 @@ func main() {
 					glog.Warningf("%v", err)
 					os.Exit(100)
 				}
+			},
+		},
+		{
+			Name:   "version",
+			Usage:  "shows version information",
+			Action: func(c *cli.Context) {
+				shellService := newShellService(c)
+				shellService.Version(c)
 			},
 		},
 	}
@@ -417,6 +481,72 @@ func main() {
 			Value: "localhost",
 			Usage: "the name to use for this minion",
 		},
+		cli.IntFlag{
+			Name:  "verbose",
+			Value: 0,
+			Usage: "the log level for V logs",
+		},
 	}
 	app.Run(os.Args)
+}
+
+func (c *ShellService) Version(ctx *cli.Context) {
+	fmt.Printf("Version:    %s\n", Version)
+	fmt.Printf("GoVersion:  %s\n", GoVersion)
+	fmt.Printf("Gitcommit:  %s\n", Gitcommit)
+	fmt.Printf("Gitbranch:  %s\n", Gitbranch)
+	fmt.Printf("Date:       %s\n", Date)
+	fmt.Printf("Buildtag:   %s\n", Buildtag)
+}
+
+// Backoff controls the exponential backoff used when connection attempts to all zookeepers fail
+type Backoff struct {
+	InitialDelay time.Duration	// the initial delay
+	MaxDelay     time.Duration	// The maximum delay
+	delay        time.Duration	// the current delay
+	random       *rand.Rand
+}
+
+// GetDelay returns the amount of delay that should be used for the current connection attempt.
+// It will return a randomized value of initialDelay on the first call, and will increase the delay
+// randomly on each subsequent call up to maxDelay. The initial delay and each subsequent delay
+// are randomized to avoid a scenario where multiple instances on the same host all start trying
+// to reconnection. In scenarios like those, we don't want all instances reconnecting in lock-step
+// with each other.
+func (backoff *Backoff) GetDelay() time.Duration {
+	defer func() {
+		factor := 2.0
+		jitter := 6.0
+
+		backoff.delay = time.Duration(float64(backoff.delay) * factor)
+		backoff.delay += time.Duration(backoff.random.Float64() * jitter * float64(time.Second))
+		if backoff.delay > backoff.MaxDelay {
+			backoff.delay = backoff.MaxDelay
+		}
+	}()
+
+	if backoff.delay == 0 {
+		backoff.Reset()
+	}
+	glog.V(2).Infof("GetDelay returned backoff interval = %2.1f", backoff.delay.Seconds())
+	return backoff.delay
+}
+
+// Reset resets the backoff delay to some random value that is btwn 80-120% of the initialDelay.
+//     We want to randomize the initial delay so in cases where many instances simultaneously
+//     lose all connections, they will not all start trying to reconnect at the same time.
+func (backoff *Backoff) Reset() {
+	start := backoff.InitialDelay.Seconds()
+	minStart := 0.8 * start
+	maxStart := 1.2 * start
+
+	// compute a random value between min and max start
+	rando := backoff.random.Float64()
+	start = minStart + (rando * (maxStart - minStart))
+	backoff.delay = time.Duration(start * float64(time.Second))
+
+	// never exceed maxDelay
+	if backoff.delay > backoff.MaxDelay {
+		backoff.delay = backoff.MaxDelay
+	}
 }
