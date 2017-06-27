@@ -175,8 +175,8 @@ func (s *ShellService) Run(cmd string, printQueueName bool, timeout uint) error 
 		if !ok {
 			return errors.New("Output channel closed unexpectedly.")
 		}
-		fmt.Fprintf(os.Stdout, output.Stdout)
-		fmt.Fprintf(os.Stderr, output.Stderr)
+		os.Stdout.WriteString(output.Stdout)
+		os.Stderr.WriteString(output.Stderr)
 		if output.Exited {
 			os.Exit(output.ExitCode)
 		}
