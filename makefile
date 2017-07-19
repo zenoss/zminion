@@ -56,7 +56,7 @@ build: goversion $(FULL_NAME)
 
 ## generic workhorse targets
 $(FULL_NAME): VERSION *.go hack/* makefile $(GOSOURCEFILES)
-	$(GO) build ${LDFLAGS} -o $(FULL_NAME) .
+	$Gk build ${LDFLAGS} -o $(FULL_NAME) .
 	$(GO) tool vet $(GOSOURCEFILES)
 	chown $(DUID):$(DGID) $(FULL_NAME)
 
