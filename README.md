@@ -1,4 +1,4 @@
 zminion
 =======
 
-A simple shell execution client/sever using redis
+A simple shell execution client/sever using redis.
