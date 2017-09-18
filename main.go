@@ -269,7 +269,8 @@ func (s *ShellService) shellExecutorProcess(msg Command, closing chan bool, retu
 
 		// subprocess has run too long
 		case <-overtime:
-			glog.Warning("Killing long execution: %s", cmd)
+			// Redacting logging in case we have credentials or other sensitive info in the message.
+			glog.Warning("Killing long execution: Redacted %.100s ************************************", cmd)
 			cmd.Process.Kill()
 
 		// we got close signal, kill subprocess
