@@ -1,5 +1,6 @@
 // Copyright 2014 Zenoss, Inc.
 // All rights reserved.
+//
 
 package main
 
@@ -175,8 +176,8 @@ func (s *ShellService) Run(cmd string, printQueueName bool, timeout uint) error 
 		if !ok {
 			return errors.New("Output channel closed unexpectedly.")
 		}
-		fmt.Fprintf(os.Stdout, output.Stdout)
-		fmt.Fprintf(os.Stderr, output.Stderr)
+		os.Stdout.WriteString(output.Stdout)
+		os.Stderr.WriteString(output.Stderr)
 		if output.Exited {
 			os.Exit(output.ExitCode)
 		}
@@ -268,7 +269,8 @@ func (s *ShellService) shellExecutorProcess(msg Command, closing chan bool, retu
 
 		// subprocess has run too long
 		case <-overtime:
-			glog.Warning("Killing long execution: %s", cmd)
+			// Redacting logging in case we have credentials or other sensitive info in the message.
+			glog.Warning("Killing long execution: Redacted %.100s ************************************", cmd)
 			cmd.Process.Kill()
 
 		// we got close signal, kill subprocess
