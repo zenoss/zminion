@@ -241,7 +241,7 @@ func (s *ShellService) shellExecutorProcess(msg Command, closing chan bool, retu
 			exitCode, _ := utils.GetExitStatus(err)
 			flush(true, exitCode)
 			returnErr <- err
-			break
+			return
 
 		// handle subprocess stdout
 		case buffer, ok := <-stdoutChan.output:
